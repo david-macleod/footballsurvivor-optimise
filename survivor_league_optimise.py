@@ -1,5 +1,6 @@
 from __future__ import print_function
 import pandas as pd
+import numpy as np 
 import requests 
 from collections import defaultdict
 from scipy.optimize import linear_sum_assignment
@@ -192,8 +193,8 @@ def optimise_picks(df, value_label):
     :returns: DataFrame with one row corresponding to each selected value 
     """
     cost_matrix = df.values * -1 # taking inverse costs as we want to maximise
+    cost_matrix[np.isnan(cost_matrix)] = 1e-12 # replace nan values with large negative value 
     row_ids, col_ids = linear_sum_assignment(cost_matrix)
-    
     d = defaultdict(list)
     for i in range(min(cost_matrix.shape)):
         row_idx = row_ids[i] 
@@ -247,7 +248,7 @@ if __name__ == '__main__':
     
     # reshape "long" data to "wide" probability matrix 
     df_prob_matrix = get_probability_matrix(df_merged)
-    
+   
     # get optimised picks 
     df_picks = optimise_picks(df_prob_matrix, value_label='p_win')
     
