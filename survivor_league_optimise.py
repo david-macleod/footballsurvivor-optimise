@@ -61,7 +61,7 @@ def fs_session_login(fs_credentials):
     assert response.url != login_url, 'login unsuccessful, check credentials'
     return session
 
-
+#TODO wrap fs methods in a class that share the session object
 def get_fs_data(fs_session, league_url):
     """
     Download and parse data from footballsurvivor.co.uk (fs) 
@@ -74,9 +74,33 @@ def get_fs_data(fs_session, league_url):
     - team: (string) team playing in match 
     - opp: (string) match opponent of team 
     - picked: (boolean) was this team picked in this gameweek in fs league
+    - result: (string) win/draw/lose/none/pending status for gameweek
+    - loc: (string) location of match for team ['home', 'away'] 
+    """ 
+    fs_username = get_fs_username(fs_session)
+    
+    fs_fixtures_df = get_fs_fixtures(fs_session, league_url)
+    
+    fs_results_df = get_fs_results(fs_session, league_url, fs_username)
+    
+    fs_data_df = pd.merge(fs_fixtures_df, fs_results_df, on='gameweek')
+    
+    return fs_data_df
+
+
+def get_fs_fixtures(fs_session, league_url):
+    """
+    Get data for gameweek fixtures
+    :param fs_session: requests session object containing authenticated fs login credentials 
+    :param league_url: url for the fs league which we will return gameweek data
+    :returns: DataFrame
+    - gameweek: (int) gameweek of match
+    - team: (string) team playing in match 
+    - opp: (string) match opponent of team 
     - loc: (string) location of match for team ['home', 'away'] 
     """
-    html_bytes = fs_session.get(league_url).content
+    fixtures_url = league_url + '/fixtures'
+    html_bytes = fs_session.get(fixtures_url).content
     html_tree = html.fromstring(html_bytes)
     
     fs_records = [] 
@@ -101,6 +125,53 @@ def get_fs_data(fs_session, league_url):
                 'loc': 'away'
                 })
     return pd.DataFrame.from_dict(fs_records)
+    
+
+def get_fs_results(fs_session, league_url, username):
+    """
+    Get data for gameweek results
+    :param fs_session: requests session object containing authenticated fs login credentials 
+    :param league_url: url for the fs league which we will return gameweek data
+    :param username: username string
+    :returns: DataFrame
+    - gameweek: (int) gameweek of match
+    - result: (string) win/draw/lose/none/pending status for gameweek
+    """
+    
+    fixtures_url = league_url + '/overview'
+    html_bytes = fs_session.get(fixtures_url).content
+    html_tree = html.fromstring(html_bytes)
+    
+    results_table = html_tree.xpath('//div[@class="leaderboard-table overview-table"]/table')[0]
+    
+    # find row in table corresponding to username
+    for i, row in enumerate(results_table.xpath('./tbody/tr')):
+        username_row = row.xpath('./td[3]/text()')[-1].strip('\n')
+        if username_row == username:
+            user_row = row
+            break
+    
+    # extract result (win/draw/loss/none/pending) from columns, first three columns do not contain results
+    results = [column.split('-')[-1] for column in user_row.xpath('./td/@class')[3:]] 
+    
+    # extract gameweeks from table header
+    gameweeks = [int(gameweek.strip('\n')) for gameweek in results_table.xpath('./thead/tr/th/text()')[3:]]
+    
+    return pd.DataFrame({'gameweek': gameweeks, 'result':results})
+        
+
+
+def get_fs_username(fs_session):
+    """
+    Get username for current login credentials
+    :returns: username string
+    """
+    url = 'https://footballsurvivor.co.uk/account'
+    html_bytes = fs_session.get(url).content
+    html_tree = html.fromstring(html_bytes)
+    
+    username = html_tree.xpath('//div[@class="form-group string optional user_nickname"]/input/@value')[0]
+    return username
     
 
 def merge_fs_fte_data(df_fs, df_fte):
@@ -159,7 +230,7 @@ def filter_team_gameweek(df, previous_picks=None, forecast_length=None, teams=se
     
     if previous_picks:
         picked_teams = df.loc[df.picked, 'team']
-        picked_gameweeks = df.loc[df.picked, 'gameweek']
+        picked_gameweeks = df.loc[df.result != 'pending', 'gameweek']
         teams.update(picked_teams) 
         gameweeks.update(picked_gameweeks)
         # update start point for forecast period if dropping previous picks 
@@ -229,7 +300,7 @@ if __name__ == '__main__':
     parser.add_argument('-f', '--forecast', action='store', dest='forecast', default=None, type=int, help='number of future weeks to make picks')
     args = parser.parse_args()
     
-    league_url = 'https://footballsurvivor.co.uk/leagues/geo_punters_winner_takes_all/entries/70392/fixtures' 
+    league_url = 'https://footballsurvivor.co.uk/leagues/geo_punters_winner_takes_all/entries/70392' 
     with open('fs_credentials.json', 'rb') as cred_file:
         fs_credentials = json.load(cred_file)
 
